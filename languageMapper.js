@@ -36,6 +36,21 @@ const languageMap = {
     'ur': 'ur-IN',
 };
 
+// Azure Neural Voice names for each language
+const voiceMap = {
+    'en-US': 'en-US-JennyNeural',
+    'hi-IN': 'hi-IN-SwaraNeural',
+    'mr-IN': 'mr-IN-AarohiNeural',
+    'bn-IN': 'bn-IN-BashkarNeural',
+    'ta-IN': 'ta-IN-PallaviNeural',
+    'te-IN': 'te-IN-ShrutiNeural',
+    'ml-IN': 'ml-IN-SobhanaNeural',
+    'kn-IN': 'kn-IN-SapnaNeural',
+    'pa-IN': 'pa-IN-GulNeural',
+    'gu-IN': 'gu-IN-DhwaniNeural',
+    'ur-IN': 'ur-IN-GulNeural',
+};
+
 function mapLanguageCode(langCode) {
     if (!langCode) {
         return 'en-US'; // Default fallback
@@ -60,4 +75,15 @@ function mapLanguageCode(langCode) {
     return 'en-US';
 }
 
-module.exports = { mapLanguageCode };
+function getVoiceNameForLang(langCode) {
+    const voice = voiceMap[langCode];
+    if (voice) {
+        return voice;
+    }
+
+    // Default to English voice if not found
+    console.warn(`No voice found for ${langCode}, using en-US-JennyNeural`);
+    return 'en-US-JennyNeural';
+}
+
+module.exports = { mapLanguageCode, getVoiceNameForLang };

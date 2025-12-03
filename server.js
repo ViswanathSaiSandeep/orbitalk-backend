@@ -1,7 +1,7 @@
 const WebSocket = require('ws');
 const speechService = require('./speechService');
 const translationService = require('./translationService');
-const { mapLanguageCode } = require('./languageMapper');
+const { mapLanguageCode, getVoiceNameForLang } = require('./languageMapper');
 const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
@@ -41,7 +41,7 @@ wss.on('connection', (ws) => {
         } else {
             if (clientData.speechService && clientData.speechService.pushStream) {
                 try {
-                    // console.log("Received PCM:", message.length); // Optional: Uncomment for debugging
+                    console.log("Received PCM:", message.length);
                     clientData.speechService.pushStream.write(message);
                 } catch (e) {
                     console.error('Error writing to push stream:', e);
@@ -65,15 +65,24 @@ function handleConfigMessage(ws, clientData, config) {
     console.log(`Received config for client ${clientData.id}:`, config);
 
     // Map language codes to Azure-compatible formats
-    const sourceLang = mapLanguageCode(config.sourceLang || 'en');
-    const targetLang = mapLanguageCode(config.targetLang || 'es');
+    // For Speech Recognition: use full code (te-IN)
+    // For Translation API: use base code only (te)
+    const sourceLangFull = mapLanguageCode(config.sourceLang || 'en');
+    const targetLangFull = mapLanguageCode(config.targetLang || 'es');
 
-    console.log(`Mapped languages: ${config.sourceLang} -> ${sourceLang}, ${config.targetLang} -> ${targetLang}`);
+    // Extract base language code for translation (te-IN → te)
+    const sourceLangBase = sourceLangFull.split('-')[0];
+    const targetLangBase = targetLangFull.split('-')[0];
 
+    console.log(`Mapped languages: ${sourceLangFull} -> ${sourceLangBase}, ${targetLangFull} -> ${targetLangBase}`);
+
+    // Store configuration
     clientData.config = {
-        sourceLang: sourceLang,
-        targetLang: targetLang,
-        voiceName: config.voiceName || null
+        sourceLang: sourceLangFull,      // Full code for speech recognition (te-IN)
+        targetLang: targetLangFull,      // Full code for speech recognition (en-US)
+        sourceLangBase: sourceLangBase,  // Base code for translation (te)
+        targetLangBase: targetLangBase,  // Base code for translation (en)
+        voiceName: getVoiceNameForLang(targetLangFull) // Full code for voice selection
     };
 
     const roomId = config.roomId || 'default-room';
@@ -104,31 +113,56 @@ async function handleRecognizedText(ws, text) {
     console.log(`[${clientData.id}] Recognized: ${text}`);
 
     try {
+        // Use BASE language codes for translation API
         const translatedText = await translationService.translateText(
             text,
-            clientData.config.sourceLang,
-            clientData.config.targetLang
+            clientData.config.sourceLangBase,  // Use "te" not "te-IN"
+            clientData.config.targetLangBase   // Use "en" not "en-US"
         );
         console.log(`[${clientData.id}] Translated: ${translatedText}`);
 
         if (!translatedText) return;
 
-        const audioBuffer = await speechService.synthesizeSpeech(
+        // Send transcript to the speaking user (original text + their own translation)
+        if (ws.readyState === WebSocket.OPEN) {
+            const transcriptData = JSON.stringify({
+                type: 'transcript',
+                original: text,
+                translated: translatedText,
+                isLocal: true,
+                timestamp: new Date().toISOString()
+            });
+            ws.send(transcriptData);
+            console.log(`[${clientData.id}] Sent transcript to speaker`);
+        }
+
+        const audioBuffer = await speechService.synthesizeSpeechWAV(
             translatedText,
-            clientData.config.targetLang,
+            clientData.config.targetLang,  // Use full code for TTS (en-US)
             clientData.config.voiceName
         );
-        console.log(`[${clientData.id}] Synthesized audio size: ${audioBuffer.byteLength}`);
-        console.log("Sending synthesized PCM:", audioBuffer.byteLength);
+        console.log(`[${clientData.id}] Synthesized WAV audio size: ${audioBuffer.byteLength}`);
 
-        // 🔵 PART 5: Broadcast to OTHER users in the room
+        // Broadcast audio and transcript to OTHER users in the room
         const room = rooms.get(clientData.roomId);
         if (room) {
             room.forEach(client => {
                 if (client !== ws && client.readyState === WebSocket.OPEN) {
+                    // Send audio
                     client.send(audioBuffer);
+
+                    // Send transcript text
+                    const transcriptData = JSON.stringify({
+                        type: 'transcript',
+                        original: text,
+                        translated: translatedText,
+                        isLocal: false,
+                        timestamp: new Date().toISOString()
+                    });
+                    client.send(transcriptData);
                 }
             });
+            console.log(`[${clientData.id}] Broadcast to ${room.size - 1} other users`);
         }
 
     } catch (error) {
