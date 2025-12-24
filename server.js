@@ -83,7 +83,7 @@ wss.on('connection', (ws) => {
 
             if (clientData.speechService && clientData.speechService.pushStream) {
                 try {
-                    console.log("Received PCM:", message.length);
+                    // console.log("Received PCM:", message.length);
                     clientData.speechService.pushStream.write(message);
                 } catch (e) {
                     console.error('Error writing to push stream:', e);
