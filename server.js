@@ -13,6 +13,37 @@ const clients = new Map();
 // Store rooms
 const rooms = new Map();
 
+// ============================================================================
+// HALF-DUPLEX AUDIO CONTROL
+// ============================================================================
+// Purpose: Prevent echo/feedback loops by gating mic audio while TTS plays.
+// 
+// Problem: When TTS audio plays on the client's speaker, the microphone picks
+//          it up and streams it back to STT, causing infinite loops:
+//          TTS → Speaker → Microphone → STT → Translation → TTS → ...
+//
+// Solution: Implement "half-duplex" mode - only one direction at a time:
+//          1. Track when each client is receiving TTS audio (isSpeaking flag)
+//          2. Gate (ignore) incoming mic audio while TTS is expected to play
+//          3. Resume STT after estimated playback duration completes
+//
+// WAV Duration Calculation:
+//          16kHz sample rate × 16-bit depth × mono = 32000 bytes/second
+//          Duration (ms) = (audioBytes / 32000) × 1000
+// ============================================================================
+
+const BYTES_PER_SECOND = 32000; // 16kHz * 16-bit * mono
+const WAV_HEADER_SIZE = 44;     // Standard WAV header size
+
+// Calculate playback duration from WAV audio buffer
+function calculatePlaybackDurationMs(audioBuffer) {
+    // Subtract WAV header to get pure PCM data size
+    const pcmBytes = audioBuffer.byteLength - WAV_HEADER_SIZE;
+    const durationMs = (pcmBytes / BYTES_PER_SECOND) * 1000;
+    // Add small buffer for safety (network latency, playback start delay)
+    return durationMs + 200;
+}
+
 console.log(`WebSocket server started on port ${PORT}`);
 
 wss.on('connection', (ws) => {
@@ -23,7 +54,10 @@ wss.on('connection', (ws) => {
         id: clientId,
         roomId: null,
         config: null,
-        speechService: null
+        speechService: null,
+        // HALF-DUPLEX: Track when this client is receiving TTS playback
+        isSpeaking: false,
+        speakingTimeout: null
     });
 
     ws.on('message', async (message, isBinary) => {
@@ -39,6 +73,14 @@ wss.on('connection', (ws) => {
                 console.error('Error parsing JSON message:', e);
             }
         } else {
+            // HALF-DUPLEX: Gate incoming audio if this client is currently hearing TTS
+            // This prevents the microphone from picking up TTS audio and creating echo
+            if (clientData.isSpeaking) {
+                // Silently drop audio - client is hearing TTS playback
+                // console.log(`[${clientData.id}] Gating audio - TTS playing`);
+                return;
+            }
+
             if (clientData.speechService && clientData.speechService.pushStream) {
                 try {
                     console.log("Received PCM:", message.length);
@@ -146,8 +188,34 @@ async function handleRecognizedText(ws, text) {
         // Broadcast audio and transcript to OTHER users in the room
         const room = rooms.get(clientData.roomId);
         if (room) {
+            // Calculate how long the TTS audio will play
+            const playbackDurationMs = calculatePlaybackDurationMs(audioBuffer);
+            console.log(`[${clientData.id}] TTS playback duration: ${playbackDurationMs.toFixed(0)}ms`);
+
             room.forEach(client => {
                 if (client !== ws && client.readyState === WebSocket.OPEN) {
+                    const recipientData = clients.get(client);
+
+                    // HALF-DUPLEX: Set speaking flag for recipient
+                    // This will gate their microphone audio during TTS playback
+                    if (recipientData) {
+                        // Clear any existing timeout
+                        if (recipientData.speakingTimeout) {
+                            clearTimeout(recipientData.speakingTimeout);
+                        }
+
+                        // Gate mic audio for this recipient
+                        recipientData.isSpeaking = true;
+                        console.log(`[${recipientData.id}] HALF-DUPLEX: Gating mic for ${playbackDurationMs.toFixed(0)}ms`);
+
+                        // Resume mic after playback completes
+                        recipientData.speakingTimeout = setTimeout(() => {
+                            recipientData.isSpeaking = false;
+                            recipientData.speakingTimeout = null;
+                            console.log(`[${recipientData.id}] HALF-DUPLEX: Mic resumed`);
+                        }, playbackDurationMs);
+                    }
+
                     // Send audio
                     client.send(audioBuffer);
 
@@ -173,6 +241,12 @@ async function handleRecognizedText(ws, text) {
 function cleanupClient(ws) {
     const clientData = clients.get(ws);
     if (clientData) {
+        // HALF-DUPLEX: Clear any pending speaking timeout
+        if (clientData.speakingTimeout) {
+            clearTimeout(clientData.speakingTimeout);
+            clientData.speakingTimeout = null;
+        }
+
         if (clientData.speechService) {
             clientData.speechService.close();
         }

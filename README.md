@@ -1,83 +1,157 @@
-# Real-time Voice Translation Backend
+# UTELO Backend
 
-This Node.js backend facilitates real-time bidirectional voice translation between users using Azure Cognitive Services.
+Real-time voice translation WebSocket server using Azure Cognitive Services.
 
 ## Features
-- **WebSocket Communication**: Real-time audio streaming.
-- **Azure Speech-to-Text (STT)**: Continuous speech recognition.
-- **Azure Translator**: Real-time text translation.
-- **Azure Text-to-Speech (TTS)**: Generates raw PCM audio (16kHz, 16-bit, mono).
-- **Room Management**: Supports multiple rooms for user pairing.
+
+- **WebSocket Communication**: Real-time bidirectional audio streaming
+- **Speech-to-Text (STT)**: Continuous speech recognition using Azure Speech SDK
+- **Translation**: Real-time text translation using Azure Translator API
+- **Text-to-Speech (TTS)**: Synthesized audio output (16kHz, 16-bit, mono WAV)
+- **Room Management**: Multi-user room support for pairing callers
+- **Half-Duplex Control**: Echo prevention during TTS playback
 
 ## Prerequisites
-- Node.js (v16+)
-- Azure Speech Service Key & Region
-- Azure Translator Key & Region
 
-## Setup
+- Node.js v16 or higher
+- Azure Speech Services subscription
+- Azure Translator subscription
 
-1.  **Install Dependencies**:
-    ```bash
-    npm install
-    ```
+## Installation
 
-2.  **Configuration**:
-    Create a `.env` file in the root directory (optional, defaults are in `config.js`):
-    ```env
-    SPEECH_KEY=your_speech_key
-    SPEECH_REGION=your_speech_region
-    TRANSLATOR_KEY=your_translator_key
-    TRANSLATOR_REGION=your_translator_region
-    PORT=8080
-    ```
+```bash
+npm install
+```
 
-## Running Locally
+## Configuration
 
-1.  **Start the Server**:
-    ```bash
-    npm start
-    ```
-    The server will listen on `ws://localhost:8080`.
+Create a `.env` file in this directory (or set environment variables):
 
-2.  **Test with Client**:
-    Generate a sample PCM file (if not present):
-    ```bash
-    node generate-pcm.js
-    ```
-    Run the test client:
-    ```bash
-    node test-client.js
-    ```
+```env
+SPEECH_KEY=your_azure_speech_key
+SPEECH_REGION=centralindia
+TRANSLATOR_KEY=your_azure_translator_key
+TRANSLATOR_REGION=centralindia
+PORT=8080
+```
 
-## Deployment (Render)
+> **Note**: The `config.js` file contains default configuration. Environment variables take precedence when set.
 
-1.  **Create a Web Service** on Render.
-2.  **Connect your repository**.
-3.  **Build Command**: `npm install`
-4.  **Start Command**: `npm start`
-5.  **Environment Variables**: Add the Azure keys and regions in the Render dashboard.
+## Running
+
+### Development
+```bash
+npm start
+```
+
+The server will start on `ws://localhost:8080` (or the PORT specified).
+
+### Production
+Deploy to a Node.js hosting service (Render.com, Heroku, AWS, etc.)
 
 ## API Reference
 
 ### WebSocket Connection
-- **URL**: `wss://<your-domain>`
 
-### Messages
+Connect to: `ws://localhost:8080` (local) or `wss://your-domain.com` (production)
 
-#### 1. Configuration (JSON)
-Send this immediately after connecting:
+### Message Protocol
+
+#### 1. Configuration Message (JSON)
+Send immediately after connecting:
+
 ```json
 {
   "type": "config",
-  "sourceLang": "en-US",
-  "targetLang": "es-ES",
-  "voiceName": "es-ES-AlvaroNeural", // Optional
-  "roomId": "room-123" // Users in the same room will hear each other
+  "sourceLang": "en",
+  "targetLang": "hi",
+  "roomId": "room-123"
 }
 ```
 
-#### 2. Audio Data (Binary)
-Stream raw PCM data (16kHz, 16-bit, mono).
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | Must be `"config"` |
+| `sourceLang` | string | Source language code (e.g., `"en"`, `"hi"`, `"te"`) |
+| `targetLang` | string | Target language code |
+| `roomId` | string | Room ID for pairing users |
 
-#### 3. Received Audio (Binary)
-The server sends back translated audio as raw PCM data.
+#### 2. Audio Data (Binary)
+Stream raw PCM audio data:
+- Sample rate: 16kHz
+- Bit depth: 16-bit
+- Channels: Mono
+
+#### 3. Transcript Response (JSON)
+Received when speech is recognized:
+
+```json
+{
+  "type": "transcript",
+  "original": "Hello, how are you?",
+  "translated": "नमस्ते, आप कैसे हैं?",
+  "isLocal": false,
+  "timestamp": "2025-12-17T08:30:00.000Z"
+}
+```
+
+#### 4. Translated Audio (Binary)
+Received as WAV audio data (16kHz, 16-bit, mono) with 44-byte header.
+
+## Supported Languages
+
+| Code | Language |
+|------|----------|
+| `en` | English |
+| `hi` | Hindi |
+| `te` | Telugu |
+| `ta` | Tamil |
+| `kn` | Kannada |
+| `ml` | Malayalam |
+| `mr` | Marathi |
+| `bn` | Bengali |
+| `gu` | Gujarati |
+| `pa` | Punjabi |
+| `ur` | Urdu |
+
+## Project Structure
+
+```
+backend/
+├── server.js              # Main WebSocket server
+├── speechService.js       # Azure Speech SDK (STT/TTS)
+├── translationService.js  # Azure Translator API
+├── languageMapper.js      # Language code mapping
+├── config.js              # Configuration
+├── package.json           # Dependencies
+├── .env.example           # Environment template
+└── render.yaml            # Render.com deployment config
+```
+
+## Deployment to Render.com
+
+1. Push this folder to a GitHub repository
+2. Create a new Web Service on [Render.com](https://render.com)
+3. Connect your repository
+4. Configure:
+   - **Build Command**: `npm install`
+   - **Start Command**: `npm start`
+5. Add environment variables in Render dashboard
+6. Deploy
+
+Your WebSocket URL will be: `wss://orbitalk-backend.onrender.com`
+
+## Troubleshooting
+
+### Connection Refused
+- Check if server is running
+- Verify correct port in client
+
+### No Translation Output
+- Verify Azure API keys are valid
+- Check Render/server logs for errors
+- Ensure audio format is correct (16kHz, 16-bit, mono PCM)
+
+### Echo/Feedback Loop
+- The server implements half-duplex mode to prevent this
+- Client should also mute mic during audio playback
